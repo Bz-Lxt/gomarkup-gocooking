@@ -83,9 +83,12 @@ func Is(err error, code string) bool {
 	return false
 }
 
+// As 把 err（可能是被 fmt.Errorf("...: %w", appErr) 包装过的错误）
+// 解包为 *AppError。使用 errors.As 遍历 Unwrap 链，
+// 保证服务层补了操作上下文后，业务错误仍保持原始 HTTP 状态码与错误码。
 func As(err error) (*AppError, bool) {
-	ae, ok := err.(*AppError)
-	if ok {
+	var ae *AppError
+	if errors.As(err, &ae) {
 		return ae, true
 	}
 	return nil, false
