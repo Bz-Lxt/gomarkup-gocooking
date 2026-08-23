@@ -18,7 +18,7 @@ func NewIngredient(d Deps) *Ingredient { return &Ingredient{d} }
 func (h *Ingredient) List(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	per, _ := strconv.Atoi(c.DefaultQuery("per_page", "200"))
-	rows, total, err := h.Catalog.ListIngredients(c.Query("q"), c.Query("stall"), c.Query("category"), page, per)
+	rows, total, err := h.Catalog.ListIngredients(c.Request.Context(), c.Query("q"), c.Query("stall"), c.Query("category"), page, per)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return

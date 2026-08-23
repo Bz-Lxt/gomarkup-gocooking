@@ -21,7 +21,7 @@ func NewRecipe(d Deps) *Recipe { return &Recipe{d} }
 func (h *Recipe) List(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	per, _ := strconv.Atoi(c.DefaultQuery("per_page", "50"))
-	rows, total, err := h.Catalog.ListRecipes(middleware.UID(c), c.Query("q"), c.Query("tag"), page, per)
+	rows, total, err := h.Catalog.ListRecipes(c.Request.Context(), middleware.UID(c), c.Query("q"), c.Query("tag"), page, per)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -45,7 +45,7 @@ func (h *Recipe) Get(c *gin.Context) {
 		middleware.WriteError(c, err)
 		return
 	}
-	r, err := h.Catalog.GetRecipe(middleware.UID(c), id)
+	r, err := h.Catalog.GetRecipe(c.Request.Context(), middleware.UID(c), id)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -58,7 +58,7 @@ func (h *Recipe) Create(c *gin.Context) {
 	if !middleware.BindJSON(c, &in) {
 		return
 	}
-	r, err := h.Catalog.CreateRecipe(middleware.UID(c), in)
+	r, err := h.Catalog.CreateRecipe(c.Request.Context(), middleware.UID(c), in)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -77,7 +77,7 @@ func (h *Recipe) Update(c *gin.Context) {
 	if !middleware.BindJSON(c, &in) {
 		return
 	}
-	r, err := h.Catalog.UpdateRecipe(middleware.UID(c), id, in)
+	r, err := h.Catalog.UpdateRecipe(c.Request.Context(), middleware.UID(c), id, in)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -91,7 +91,7 @@ func (h *Recipe) Delete(c *gin.Context) {
 		middleware.WriteError(c, err)
 		return
 	}
-	if err := h.Catalog.DeleteRecipe(middleware.UID(c), id); err != nil {
+	if err := h.Catalog.DeleteRecipe(c.Request.Context(), middleware.UID(c), id); err != nil {
 		middleware.WriteError(c, err)
 		return
 	}
@@ -104,7 +104,7 @@ func (h *Recipe) Duplicate(c *gin.Context) {
 		middleware.WriteError(c, err)
 		return
 	}
-	r, err := h.Catalog.DuplicateRecipe(middleware.UID(c), id)
+	r, err := h.Catalog.DuplicateRecipe(c.Request.Context(), middleware.UID(c), id)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return

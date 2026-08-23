@@ -3,7 +3,6 @@
 package middleware
 
 import (
-	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -38,7 +37,6 @@ func CORS() gin.HandlerFunc {
 func AccessLog() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
-		c.Request = c.Request.WithContext(context.WithoutCancel(c.Request.Context()))
 		c.Next()
 		logger.Info("http",
 			"method", c.Request.Method,
@@ -93,6 +91,13 @@ func UID(c *gin.Context) uint {
 }
 
 func WriteError(c *gin.Context, err error) {
+	// 客户端断开或请求超时导致的 context 取消不应记录为内部错误，
+	// 也不应尝试向已关闭的连接写响应。
+	if apperr.Cancelled(err) {
+		logger.Info("request cancelled", "method", c.Request.Method, "path", c.Request.URL.Path)
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
 	ae, ok := apperr.As(err)
 	if !ok {
 		logger.Error("unhandled", "err", err)

@@ -24,7 +24,7 @@ func (h *MealPlan) Week(c *gin.Context) {
 	if week == "" {
 		week = timeutil.FormatDate(timeutil.Today())
 	}
-	out, err := h.Planner.WeekPlan(middleware.UID(c), week)
+	out, err := h.Planner.WeekPlan(c.Request.Context(), middleware.UID(c), week)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -37,7 +37,7 @@ func (h *MealPlan) Add(c *gin.Context) {
 	if !middleware.BindJSON(c, &in) {
 		return
 	}
-	out, err := h.Planner.AddSlot(middleware.UID(c), in)
+	out, err := h.Planner.AddSlot(c.Request.Context(), middleware.UID(c), in)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -55,7 +55,7 @@ func (h *MealPlan) Patch(c *gin.Context) {
 	if !middleware.BindJSON(c, &in) {
 		return
 	}
-	out, err := h.Planner.PatchSlot(middleware.UID(c), id, in)
+	out, err := h.Planner.PatchSlot(c.Request.Context(), middleware.UID(c), id, in)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -69,7 +69,7 @@ func (h *MealPlan) Delete(c *gin.Context) {
 		middleware.WriteError(c, err)
 		return
 	}
-	if err := h.Planner.DeleteSlot(middleware.UID(c), id); err != nil {
+	if err := h.Planner.DeleteSlot(c.Request.Context(), middleware.UID(c), id); err != nil {
 		middleware.WriteError(c, err)
 		return
 	}
@@ -85,7 +85,7 @@ func (h *MealPlan) Clear(c *gin.Context) {
 		middleware.WriteError(c, apperr.Required("week"))
 		return
 	}
-	if err := h.Planner.ClearWeek(middleware.UID(c), in.Week); err != nil {
+	if err := h.Planner.ClearWeek(c.Request.Context(), middleware.UID(c), in.Week); err != nil {
 		middleware.WriteError(c, err)
 		return
 	}
@@ -101,7 +101,7 @@ func (h *MealPlan) CopyNext(c *gin.Context) {
 		middleware.WriteError(c, apperr.Required("week"))
 		return
 	}
-	if err := h.Planner.CopyNext(middleware.UID(c), in.Week); err != nil {
+	if err := h.Planner.CopyNext(c.Request.Context(), middleware.UID(c), in.Week); err != nil {
 		middleware.WriteError(c, err)
 		return
 	}

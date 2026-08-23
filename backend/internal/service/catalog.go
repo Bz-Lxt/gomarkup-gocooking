@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -21,7 +22,7 @@ type Catalog struct {
 
 func NewCatalog(db *gorm.DB) *Catalog { return &Catalog{DB: db} }
 
-func (s *Catalog) Authenticate(username, password string) (*model.User, error) {
+func (s *Catalog) Authenticate(ctx context.Context, username, password string) (*model.User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, apperr.Required("username")
@@ -30,7 +31,10 @@ func (s *Catalog) Authenticate(username, password string) (*model.User, error) {
 		return nil, apperr.Required("password")
 	}
 	var u model.User
-	if err := s.DB.Where("username = ?", username).First(&u).Error; err != nil {
+	if err := s.DB.WithContext(ctx).Where("username = ?", username).First(&u).Error; err != nil {
+		if apperr.Cancelled(err) {
+			return nil, ctx.Err()
+		}
 		if err == gorm.ErrRecordNotFound {
 			return nil, apperr.Unauthorized("用户名或密码错误")
 		}
@@ -42,9 +46,9 @@ func (s *Catalog) Authenticate(username, password string) (*model.User, error) {
 	return &u, nil
 }
 
-func (s *Catalog) ListIngredients(q, stall, category string, page, per int) ([]model.Ingredient, int64, error) {
+func (s *Catalog) ListIngredients(ctx context.Context, q, stall, category string, page, per int) ([]model.Ingredient, int64, error) {
 	page, per = normalizePage(page, per)
-	tx := s.DB.Model(&model.Ingredient{})
+	tx := s.DB.WithContext(ctx).Model(&model.Ingredient{})
 	if q = strings.TrimSpace(q); q != "" {
 		like := "%" + q + "%"
 		tx = tx.Where("name ILIKE ? OR aliases ILIKE ?", like, like)
@@ -60,18 +64,18 @@ func (s *Catalog) ListIngredients(q, stall, category string, page, per int) ([]m
 	}
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
-		return nil, 0, apperr.Internal(err)
+		return nil, 0, wrapQueryErr(err)
 	}
 	var rows []model.Ingredient
 	if err := tx.Order("id asc").Offset((page - 1) * per).Limit(per).Find(&rows).Error; err != nil {
-		return nil, 0, apperr.Internal(err)
+		return nil, 0, wrapQueryErr(err)
 	}
 	return rows, total, nil
 }
 
-func (s *Catalog) ListRecipes(userID uint, q, tag string, page, per int) ([]model.Recipe, int64, error) {
+func (s *Catalog) ListRecipes(ctx context.Context, userID uint, q, tag string, page, per int) ([]model.Recipe, int64, error) {
 	page, per = normalizePage(page, per)
-	tx := s.DB.Model(&model.Recipe{}).Where("user_id IS NULL OR user_id = ?", userID)
+	tx := s.DB.WithContext(ctx).Model(&model.Recipe{}).Where("user_id IS NULL OR user_id = ?", userID)
 	if q = strings.TrimSpace(q); q != "" {
 		tx = tx.Where("name ILIKE ?", "%"+q+"%")
 	}
@@ -80,19 +84,22 @@ func (s *Catalog) ListRecipes(userID uint, q, tag string, page, per int) ([]mode
 	}
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
-		return nil, 0, apperr.Internal(err)
+		return nil, 0, wrapQueryErr(err)
 	}
 	var rows []model.Recipe
 	if err := tx.Preload("Items.Ingredient").Order("id asc").Offset((page - 1) * per).Limit(per).Find(&rows).Error; err != nil {
-		return nil, 0, apperr.Internal(err)
+		return nil, 0, wrapQueryErr(err)
 	}
 	return rows, total, nil
 }
 
-func (s *Catalog) GetRecipe(userID, id uint) (*model.Recipe, error) {
+func (s *Catalog) GetRecipe(ctx context.Context, userID, id uint) (*model.Recipe, error) {
 	var r model.Recipe
-	err := s.DB.Preload("Items.Ingredient").Where("id = ? AND (user_id IS NULL OR user_id = ?)", id, userID).First(&r).Error
+	err := s.DB.WithContext(ctx).Preload("Items.Ingredient").Where("id = ? AND (user_id IS NULL OR user_id = ?)", id, userID).First(&r).Error
 	if err != nil {
+		if apperr.Cancelled(err) {
+			return nil, ctx.Err()
+		}
 		if err == gorm.ErrRecordNotFound {
 			return nil, apperr.NotFound("菜谱")
 		}
@@ -101,17 +108,17 @@ func (s *Catalog) GetRecipe(userID, id uint) (*model.Recipe, error) {
 	return &r, nil
 }
 
-func (s *Catalog) CreateRecipe(userID uint, in dto.RecipeIn) (*model.Recipe, error) {
+func (s *Catalog) CreateRecipe(ctx context.Context, userID uint, in dto.RecipeIn) (*model.Recipe, error) {
 	r, err := recipeFromInput(in)
 	if err != nil {
 		return nil, err
 	}
 	uid := userID
 	r.UserID = &uid
-	if err := s.validateItems(in.Items); err != nil {
+	if err := s.validateItems(ctx, in.Items); err != nil {
 		return nil, err
 	}
-	if err := s.DB.Transaction(func(tx *gorm.DB) error {
+	if err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(r).Error; err != nil {
 			return err
 		}
@@ -121,13 +128,13 @@ func (s *Catalog) CreateRecipe(userID uint, in dto.RecipeIn) (*model.Recipe, err
 		}
 		return nil
 	}); err != nil {
-		return nil, apperr.Internal(err)
+		return nil, wrapQueryErr(err)
 	}
-	return s.GetRecipe(userID, r.ID)
+	return s.GetRecipe(ctx, userID, r.ID)
 }
 
-func (s *Catalog) UpdateRecipe(userID, id uint, in dto.RecipeIn) (*model.Recipe, error) {
-	cur, err := s.GetRecipe(userID, id)
+func (s *Catalog) UpdateRecipe(ctx context.Context, userID, id uint, in dto.RecipeIn) (*model.Recipe, error) {
+	cur, err := s.GetRecipe(ctx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -138,10 +145,10 @@ func (s *Catalog) UpdateRecipe(userID, id uint, in dto.RecipeIn) (*model.Recipe,
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateItems(in.Items); err != nil {
+	if err := s.validateItems(ctx, in.Items); err != nil {
 		return nil, err
 	}
-	if err := s.DB.Transaction(func(tx *gorm.DB) error {
+	if err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(cur).Updates(map[string]any{
 			"name": next.Name, "cover_url": next.CoverURL, "cuisine_tag": next.CuisineTag,
 			"servings": next.Servings, "steps_json": next.StepsJSON, "updated_at": timeutil.Now(),
@@ -157,27 +164,27 @@ func (s *Catalog) UpdateRecipe(userID, id uint, in dto.RecipeIn) (*model.Recipe,
 		}
 		return tx.Create(&items).Error
 	}); err != nil {
-		return nil, apperr.Internal(err)
+		return nil, wrapQueryErr(err)
 	}
-	return s.GetRecipe(userID, id)
+	return s.GetRecipe(ctx, userID, id)
 }
 
-func (s *Catalog) DeleteRecipe(userID, id uint) error {
-	cur, err := s.GetRecipe(userID, id)
+func (s *Catalog) DeleteRecipe(ctx context.Context, userID, id uint) error {
+	cur, err := s.GetRecipe(ctx, userID, id)
 	if err != nil {
 		return err
 	}
 	if cur.UserID == nil || *cur.UserID != userID {
 		return apperr.Conflict("系统菜谱不可删除")
 	}
-	if err := s.DB.Delete(&model.Recipe{}, id).Error; err != nil {
-		return apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Delete(&model.Recipe{}, id).Error; err != nil {
+		return wrapQueryErr(err)
 	}
 	return nil
 }
 
-func (s *Catalog) DuplicateRecipe(userID, id uint) (*model.Recipe, error) {
-	src, err := s.GetRecipe(userID, id)
+func (s *Catalog) DuplicateRecipe(ctx context.Context, userID, id uint) (*model.Recipe, error) {
+	src, err := s.GetRecipe(ctx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -190,10 +197,10 @@ func (s *Catalog) DuplicateRecipe(userID, id uint) (*model.Recipe, error) {
 			IngredientID: it.IngredientID, Quantity: it.Quantity, Unit: it.Unit, Optional: it.Optional,
 		})
 	}
-	return s.CreateRecipe(userID, in)
+	return s.CreateRecipe(ctx, userID, in)
 }
 
-func (s *Catalog) validateItems(items []dto.RecipeItemIn) error {
+func (s *Catalog) validateItems(ctx context.Context, items []dto.RecipeItemIn) error {
 	if len(items) == 0 {
 		return apperr.Validation("至少需要一味食材", apperr.FieldError{Field: "items", Message: "不能为空", Code: "required"})
 	}
@@ -211,8 +218,8 @@ func (s *Catalog) validateItems(items []dto.RecipeItemIn) error {
 		ids = append(ids, it.IngredientID)
 	}
 	var cnt int64
-	if err := s.DB.Model(&model.Ingredient{}).Where("id IN ?", ids).Count(&cnt).Error; err != nil {
-		return apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Model(&model.Ingredient{}).Where("id IN ?", ids).Count(&cnt).Error; err != nil {
+		return wrapQueryErr(err)
 	}
 	if int(cnt) != uniqLen(ids) {
 		return apperr.Validation("存在未知食材", apperr.FieldError{Field: "items", Message: "ingredient_id 无效", Code: "invalid"})
@@ -354,4 +361,14 @@ func uniqLen(ids []uint) int {
 		seen[id] = struct{}{}
 	}
 	return len(seen)
+}
+
+// wrapQueryErr 把 GORM/pqx 返回的 error 归类：
+// 若是 context 取消/超时，直接返回 ctx 的错误（让 handler 判断是否需要写响应）；
+// 否则包装成 500 内部错误。
+func wrapQueryErr(err error) error {
+	if apperr.Cancelled(err) {
+		return err
+	}
+	return apperr.Internal(err)
 }

@@ -22,7 +22,7 @@ func (h *Auth) Login(c *gin.Context) {
 	if !middleware.BindJSON(c, &req) {
 		return
 	}
-	u, err := h.Catalog.Authenticate(req.Username, req.Password)
+	u, err := h.Catalog.Authenticate(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return

@@ -31,7 +31,7 @@ func (h *Shopping) Generate(c *gin.Context) {
 	if in.To == "" {
 		in.To = timeutil.FormatDate(timeutil.EndOfWeek(timeutil.Today()))
 	}
-	out, err := h.Planner.Generate(middleware.UID(c), in.From, in.To)
+	out, err := h.Planner.Generate(c.Request.Context(), middleware.UID(c), in.From, in.To)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -44,7 +44,7 @@ func (h *Shopping) Check(c *gin.Context) {
 	if !middleware.BindJSON(c, &in) {
 		return
 	}
-	if err := h.Planner.SetCheck(middleware.UID(c), in); err != nil {
+	if err := h.Planner.SetCheck(c.Request.Context(), middleware.UID(c), in); err != nil {
 		middleware.WriteError(c, err)
 		return
 	}
@@ -56,7 +56,7 @@ func (h *Shopping) Restore(c *gin.Context) {
 	if !middleware.BindJSON(c, &in) {
 		return
 	}
-	if err := h.Planner.Restore(middleware.UID(c), in); err != nil {
+	if err := h.Planner.Restore(c.Request.Context(), middleware.UID(c), in); err != nil {
 		middleware.WriteError(c, err)
 		return
 	}

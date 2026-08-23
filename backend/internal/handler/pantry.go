@@ -16,7 +16,7 @@ type Pantry struct{ Deps }
 func NewPantry(d Deps) *Pantry { return &Pantry{d} }
 
 func (h *Pantry) List(c *gin.Context) {
-	out, err := h.Planner.ListPantry(middleware.UID(c))
+	out, err := h.Planner.ListPantry(c.Request.Context(), middleware.UID(c))
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -29,7 +29,7 @@ func (h *Pantry) Create(c *gin.Context) {
 	if !middleware.BindJSON(c, &in) {
 		return
 	}
-	out, err := h.Planner.CreatePantry(middleware.UID(c), in)
+	out, err := h.Planner.CreatePantry(c.Request.Context(), middleware.UID(c), in)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -47,7 +47,7 @@ func (h *Pantry) Update(c *gin.Context) {
 	if !middleware.BindJSON(c, &in) {
 		return
 	}
-	out, err := h.Planner.UpdatePantry(middleware.UID(c), id, in)
+	out, err := h.Planner.UpdatePantry(c.Request.Context(), middleware.UID(c), id, in)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -61,7 +61,7 @@ func (h *Pantry) Delete(c *gin.Context) {
 		middleware.WriteError(c, err)
 		return
 	}
-	if err := h.Planner.DeletePantry(middleware.UID(c), id); err != nil {
+	if err := h.Planner.DeletePantry(c.Request.Context(), middleware.UID(c), id); err != nil {
 		middleware.WriteError(c, err)
 		return
 	}

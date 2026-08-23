@@ -16,7 +16,7 @@ type Settings struct{ Deps }
 func NewSettings(d Deps) *Settings { return &Settings{d} }
 
 func (h *Settings) List(c *gin.Context) {
-	out, err := h.Planner.Staples(middleware.UID(c))
+	out, err := h.Planner.Staples(c.Request.Context(), middleware.UID(c))
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -29,7 +29,7 @@ func (h *Settings) Put(c *gin.Context) {
 	if !middleware.BindJSON(c, &in) {
 		return
 	}
-	out, err := h.Planner.PutStaples(middleware.UID(c), in)
+	out, err := h.Planner.PutStaples(c.Request.Context(), middleware.UID(c), in)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return
@@ -42,7 +42,7 @@ func (h *Settings) Add(c *gin.Context) {
 	if !middleware.BindJSON(c, &in) {
 		return
 	}
-	out, err := h.Planner.AddStaple(middleware.UID(c), in)
+	out, err := h.Planner.AddStaple(c.Request.Context(), middleware.UID(c), in)
 	if err != nil {
 		middleware.WriteError(c, err)
 		return

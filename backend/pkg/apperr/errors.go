@@ -3,6 +3,7 @@
 package apperr
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -81,6 +82,12 @@ func Is(err error, code string) bool {
 		return ae.Code == code
 	}
 	return false
+}
+
+// Cancelled 判断 err 是否由 context 取消/超时引起（客户端断开或请求超时）。
+// GORM/pqx 在查询被取消时返回的 error 经 errors.Is 可追溯到 context.Canceled。
+func Cancelled(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func As(err error) (*AppError, bool) {

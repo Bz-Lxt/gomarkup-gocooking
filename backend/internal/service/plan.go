@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ type Planner struct {
 
 func NewPlanner(db *gorm.DB) *Planner { return &Planner{DB: db} }
 
-func (s *Planner) WeekPlan(userID uint, week string) (dto.WeekPlanOut, error) {
+func (s *Planner) WeekPlan(ctx context.Context, userID uint, week string) (dto.WeekPlanOut, error) {
 	anchor, err := timeutil.ParseDate(week)
 	if err != nil {
 		return dto.WeekPlanOut{}, apperr.Validation("日期格式应为 yyyy-MM-dd", apperr.FieldError{Field: "week", Message: "格式错误", Code: "invalid_format"})
@@ -28,11 +29,11 @@ func (s *Planner) WeekPlan(userID uint, week string) (dto.WeekPlanOut, error) {
 	start := timeutil.StartOfWeek(anchor)
 	end := timeutil.EndOfWeek(anchor)
 	var slots []model.MealSlot
-	if err := s.DB.Preload("Recipe.Items.Ingredient").
+	if err := s.DB.WithContext(ctx).Preload("Recipe.Items.Ingredient").
 		Where("user_id = ? AND plan_date >= ? AND plan_date <= ?", userID, start, end).
 		Order("plan_date asc, slot asc, sort_order asc, id asc").
 		Find(&slots).Error; err != nil {
-		return dto.WeekPlanOut{}, apperr.Internal(err)
+		return dto.WeekPlanOut{}, wrapQueryErr(err)
 	}
 	out := dto.WeekPlanOut{WeekStart: timeutil.FormatDate(start), WeekEnd: timeutil.FormatDate(end)}
 	for _, sl := range slots {
@@ -44,7 +45,7 @@ func (s *Planner) WeekPlan(userID uint, week string) (dto.WeekPlanOut, error) {
 	return out, nil
 }
 
-func (s *Planner) AddSlot(userID uint, in dto.SlotIn) (dto.SlotOut, error) {
+func (s *Planner) AddSlot(ctx context.Context, userID uint, in dto.SlotIn) (dto.SlotOut, error) {
 	d, err := timeutil.ParseDate(in.Date)
 	if err != nil {
 		return dto.SlotOut{}, apperr.Validation("日期格式应为 yyyy-MM-dd", apperr.FieldError{Field: "date", Message: "格式错误", Code: "invalid_format"})
@@ -63,32 +64,38 @@ func (s *Planner) AddSlot(userID uint, in dto.SlotIn) (dto.SlotOut, error) {
 		return dto.SlotOut{}, apperr.Validation("份数倍数超范围", apperr.FieldError{Field: "servings_multiplier", Message: "须在 0.5–4", Code: "out_of_range"})
 	}
 	var rec model.Recipe
-	if err := s.DB.Where("id = ? AND (user_id IS NULL OR user_id = ?)", in.RecipeID, userID).First(&rec).Error; err != nil {
+	if err := s.DB.WithContext(ctx).Where("id = ? AND (user_id IS NULL OR user_id = ?)", in.RecipeID, userID).First(&rec).Error; err != nil {
+		if apperr.Cancelled(err) {
+			return dto.SlotOut{}, ctx.Err()
+		}
 		if err == gorm.ErrRecordNotFound {
 			return dto.SlotOut{}, apperr.NotFound("菜谱")
 		}
 		return dto.SlotOut{}, apperr.Internal(err)
 	}
 	var maxOrd int
-	_ = s.DB.Model(&model.MealSlot{}).
+	_ = s.DB.WithContext(ctx).Model(&model.MealSlot{}).
 		Where("user_id = ? AND plan_date = ? AND slot = ?", userID, d, in.Slot).
 		Select("COALESCE(MAX(sort_order),0)").Scan(&maxOrd)
 	row := model.MealSlot{
 		UserID: userID, PlanDate: d, Slot: in.Slot, RecipeID: in.RecipeID,
 		ServingsMultiplier: mult, SortOrder: maxOrd + 1, CreatedAt: timeutil.Now(),
 	}
-	if err := s.DB.Create(&row).Error; err != nil {
-		return dto.SlotOut{}, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Create(&row).Error; err != nil {
+		return dto.SlotOut{}, wrapQueryErr(err)
 	}
-	if err := s.DB.Preload("Recipe.Items.Ingredient").First(&row, row.ID).Error; err != nil {
-		return dto.SlotOut{}, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Preload("Recipe.Items.Ingredient").First(&row, row.ID).Error; err != nil {
+		return dto.SlotOut{}, wrapQueryErr(err)
 	}
 	return slotOut(row), nil
 }
 
-func (s *Planner) PatchSlot(userID, id uint, in dto.SlotPatch) (dto.SlotOut, error) {
+func (s *Planner) PatchSlot(ctx context.Context, userID, id uint, in dto.SlotPatch) (dto.SlotOut, error) {
 	var row model.MealSlot
-	if err := s.DB.Where("id = ? AND user_id = ?", id, userID).First(&row).Error; err != nil {
+	if err := s.DB.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).First(&row).Error; err != nil {
+		if apperr.Cancelled(err) {
+			return dto.SlotOut{}, ctx.Err()
+		}
 		if err == gorm.ErrRecordNotFound {
 			return dto.SlotOut{}, apperr.NotFound("排期")
 		}
@@ -118,20 +125,20 @@ func (s *Planner) PatchSlot(userID, id uint, in dto.SlotPatch) (dto.SlotOut, err
 		updates["sort_order"] = *in.SortOrder
 	}
 	if len(updates) > 0 {
-		if err := s.DB.Model(&row).Updates(updates).Error; err != nil {
-			return dto.SlotOut{}, apperr.Internal(err)
+		if err := s.DB.WithContext(ctx).Model(&row).Updates(updates).Error; err != nil {
+			return dto.SlotOut{}, wrapQueryErr(err)
 		}
 	}
-	if err := s.DB.Preload("Recipe.Items.Ingredient").First(&row, id).Error; err != nil {
-		return dto.SlotOut{}, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Preload("Recipe.Items.Ingredient").First(&row, id).Error; err != nil {
+		return dto.SlotOut{}, wrapQueryErr(err)
 	}
 	return slotOut(row), nil
 }
 
-func (s *Planner) DeleteSlot(userID, id uint) error {
-	res := s.DB.Where("id = ? AND user_id = ?", id, userID).Delete(&model.MealSlot{})
+func (s *Planner) DeleteSlot(ctx context.Context, userID, id uint) error {
+	res := s.DB.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).Delete(&model.MealSlot{})
 	if res.Error != nil {
-		return apperr.Internal(res.Error)
+		return wrapQueryErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
 		return apperr.NotFound("排期")
@@ -139,20 +146,20 @@ func (s *Planner) DeleteSlot(userID, id uint) error {
 	return nil
 }
 
-func (s *Planner) ClearWeek(userID uint, week string) error {
+func (s *Planner) ClearWeek(ctx context.Context, userID uint, week string) error {
 	anchor, err := timeutil.ParseDate(week)
 	if err != nil {
 		return apperr.Validation("日期格式错误", apperr.FieldError{Field: "week", Message: "格式错误", Code: "invalid_format"})
 	}
 	start, end := timeutil.StartOfWeek(anchor), timeutil.EndOfWeek(anchor)
-	if err := s.DB.Where("user_id = ? AND plan_date >= ? AND plan_date <= ?", userID, start, end).
+	if err := s.DB.WithContext(ctx).Where("user_id = ? AND plan_date >= ? AND plan_date <= ?", userID, start, end).
 		Delete(&model.MealSlot{}).Error; err != nil {
-		return apperr.Internal(err)
+		return wrapQueryErr(err)
 	}
 	return nil
 }
 
-func (s *Planner) CopyNext(userID uint, week string) error {
+func (s *Planner) CopyNext(ctx context.Context, userID uint, week string) error {
 	anchor, err := timeutil.ParseDate(week)
 	if err != nil {
 		return apperr.Validation("日期格式错误", apperr.FieldError{Field: "week", Message: "格式错误", Code: "invalid_format"})
@@ -161,10 +168,10 @@ func (s *Planner) CopyNext(userID uint, week string) error {
 	nextStart := start.AddDate(0, 0, 7)
 	nextEnd := end.AddDate(0, 0, 7)
 	var src []model.MealSlot
-	if err := s.DB.Where("user_id = ? AND plan_date >= ? AND plan_date <= ?", userID, start, end).Find(&src).Error; err != nil {
-		return apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Where("user_id = ? AND plan_date >= ? AND plan_date <= ?", userID, start, end).Find(&src).Error; err != nil {
+		return wrapQueryErr(err)
 	}
-	return s.DB.Transaction(func(tx *gorm.DB) error {
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("user_id = ? AND plan_date >= ? AND plan_date <= ?", userID, nextStart, nextEnd).
 			Delete(&model.MealSlot{}).Error; err != nil {
 			return err
@@ -182,10 +189,10 @@ func (s *Planner) CopyNext(userID uint, week string) error {
 	})
 }
 
-func (s *Planner) ListPantry(userID uint) ([]dto.PantryOut, error) {
+func (s *Planner) ListPantry(ctx context.Context, userID uint) ([]dto.PantryOut, error) {
 	var rows []model.PantryItem
-	if err := s.DB.Preload("Ingredient").Where("user_id = ?", userID).Order("expires_at asc").Find(&rows).Error; err != nil {
-		return nil, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Preload("Ingredient").Where("user_id = ?", userID).Order("expires_at asc").Find(&rows).Error; err != nil {
+		return nil, wrapQueryErr(err)
 	}
 	today := timeutil.Today()
 	out := make([]dto.PantryOut, 0, len(rows))
@@ -195,26 +202,29 @@ func (s *Planner) ListPantry(userID uint) ([]dto.PantryOut, error) {
 	return out, nil
 }
 
-func (s *Planner) CreatePantry(userID uint, in dto.PantryIn) (dto.PantryOut, error) {
+func (s *Planner) CreatePantry(ctx context.Context, userID uint, in dto.PantryIn) (dto.PantryOut, error) {
 	row, err := pantryFromInput(userID, in)
 	if err != nil {
 		return dto.PantryOut{}, err
 	}
-	if err := s.mustIngredient(in.IngredientID); err != nil {
+	if err := s.mustIngredient(ctx, in.IngredientID); err != nil {
 		return dto.PantryOut{}, err
 	}
-	if err := s.DB.Create(row).Error; err != nil {
-		return dto.PantryOut{}, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Create(row).Error; err != nil {
+		return dto.PantryOut{}, wrapQueryErr(err)
 	}
-	if err := s.DB.Preload("Ingredient").First(row, row.ID).Error; err != nil {
-		return dto.PantryOut{}, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Preload("Ingredient").First(row, row.ID).Error; err != nil {
+		return dto.PantryOut{}, wrapQueryErr(err)
 	}
 	return pantryOut(*row, timeutil.Today()), nil
 }
 
-func (s *Planner) UpdatePantry(userID, id uint, in dto.PantryIn) (dto.PantryOut, error) {
+func (s *Planner) UpdatePantry(ctx context.Context, userID, id uint, in dto.PantryIn) (dto.PantryOut, error) {
 	var cur model.PantryItem
-	if err := s.DB.Where("id = ? AND user_id = ?", id, userID).First(&cur).Error; err != nil {
+	if err := s.DB.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).First(&cur).Error; err != nil {
+		if apperr.Cancelled(err) {
+			return dto.PantryOut{}, ctx.Err()
+		}
 		if err == gorm.ErrRecordNotFound {
 			return dto.PantryOut{}, apperr.NotFound("库存")
 		}
@@ -224,25 +234,25 @@ func (s *Planner) UpdatePantry(userID, id uint, in dto.PantryIn) (dto.PantryOut,
 	if err != nil {
 		return dto.PantryOut{}, err
 	}
-	if err := s.mustIngredient(in.IngredientID); err != nil {
+	if err := s.mustIngredient(ctx, in.IngredientID); err != nil {
 		return dto.PantryOut{}, err
 	}
-	if err := s.DB.Model(&cur).Updates(map[string]any{
+	if err := s.DB.WithContext(ctx).Model(&cur).Updates(map[string]any{
 		"ingredient_id": next.IngredientID, "quantity": next.Quantity, "unit": next.Unit,
 		"stocked_at": next.StockedAt, "expires_at": next.ExpiresAt, "updated_at": timeutil.Now(),
 	}).Error; err != nil {
-		return dto.PantryOut{}, apperr.Internal(err)
+		return dto.PantryOut{}, wrapQueryErr(err)
 	}
-	if err := s.DB.Preload("Ingredient").First(&cur, id).Error; err != nil {
-		return dto.PantryOut{}, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Preload("Ingredient").First(&cur, id).Error; err != nil {
+		return dto.PantryOut{}, wrapQueryErr(err)
 	}
 	return pantryOut(cur, timeutil.Today()), nil
 }
 
-func (s *Planner) DeletePantry(userID, id uint) error {
-	res := s.DB.Where("id = ? AND user_id = ?", id, userID).Delete(&model.PantryItem{})
+func (s *Planner) DeletePantry(ctx context.Context, userID, id uint) error {
+	res := s.DB.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).Delete(&model.PantryItem{})
 	if res.Error != nil {
-		return apperr.Internal(res.Error)
+		return wrapQueryErr(res.Error)
 	}
 	if res.RowsAffected == 0 {
 		return apperr.NotFound("库存")
@@ -250,13 +260,13 @@ func (s *Planner) DeletePantry(userID, id uint) error {
 	return nil
 }
 
-func (s *Planner) Staples(userID uint) ([]dto.StapleItem, error) {
+func (s *Planner) Staples(ctx context.Context, userID uint) ([]dto.StapleItem, error) {
 	var ings []model.Ingredient
-	if err := s.DB.Order("is_staple_default desc, id asc").Find(&ings).Error; err != nil {
-		return nil, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Order("is_staple_default desc, id asc").Find(&ings).Error; err != nil {
+		return nil, wrapQueryErr(err)
 	}
 	var ov []model.StapleOverride
-	_ = s.DB.Where("user_id = ?", userID).Find(&ov)
+	_ = s.DB.WithContext(ctx).Where("user_id = ?", userID).Find(&ov)
 	om := map[uint]bool{}
 	for _, o := range ov {
 		om[o.IngredientID] = o.Enabled
@@ -279,11 +289,11 @@ func (s *Planner) Staples(userID uint) ([]dto.StapleItem, error) {
 	return out, nil
 }
 
-func (s *Planner) PutStaples(userID uint, in dto.StaplesPut) ([]dto.StapleItem, error) {
+func (s *Planner) PutStaples(ctx context.Context, userID uint, in dto.StaplesPut) ([]dto.StapleItem, error) {
 	if len(in.Items) == 0 {
 		return nil, apperr.Validation("items 不能为空", apperr.FieldError{Field: "items", Message: "必填", Code: "required"})
 	}
-	err := s.DB.Transaction(func(tx *gorm.DB) error {
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, it := range in.Items {
 			if it.IngredientID == 0 {
 				return apperr.Required("items.ingredient_id")
@@ -300,44 +310,44 @@ func (s *Planner) PutStaples(userID uint, in dto.StaplesPut) ([]dto.StapleItem, 
 		if ae, ok := apperr.As(err); ok {
 			return nil, ae
 		}
-		return nil, apperr.Internal(err)
+		return nil, wrapQueryErr(err)
 	}
-	return s.Staples(userID)
+	return s.Staples(ctx, userID)
 }
 
-func (s *Planner) AddStaple(userID uint, in dto.StapleAdd) ([]dto.StapleItem, error) {
+func (s *Planner) AddStaple(ctx context.Context, userID uint, in dto.StapleAdd) ([]dto.StapleItem, error) {
 	if in.IngredientID == 0 {
 		return nil, apperr.Required("ingredient_id")
 	}
-	if err := s.mustIngredient(in.IngredientID); err != nil {
+	if err := s.mustIngredient(ctx, in.IngredientID); err != nil {
 		return nil, err
 	}
 	row := model.StapleOverride{UserID: userID, IngredientID: in.IngredientID, Enabled: in.Enabled, UpdatedAt: timeutil.Now()}
-	if err := s.DB.Where("user_id = ? AND ingredient_id = ?", userID, in.IngredientID).
+	if err := s.DB.WithContext(ctx).Where("user_id = ? AND ingredient_id = ?", userID, in.IngredientID).
 		Assign(row).FirstOrCreate(&row).Error; err != nil {
-		return nil, apperr.Internal(err)
+		return nil, wrapQueryErr(err)
 	}
-	return s.Staples(userID)
+	return s.Staples(ctx, userID)
 }
 
 // Generate 编排引擎六步并挂上勾选/加回状态。
 // 1) 展开排期 2) 按日聚合 3) FEFO 扣库存 4) 跨日再合并
 // 5) 常备过滤 6) 按摊位/蔬菜分类归组。
 // 勾选键 = ingredient_id + dimension + base unit（check_unit），避免「斤/g」展示单位对不上。
-func (s *Planner) Generate(userID uint, fromS, toS string) (dto.ShoppingOut, error) {
+func (s *Planner) Generate(ctx context.Context, userID uint, fromS, toS string) (dto.ShoppingOut, error) {
 	from, to, err := parseRange(fromS, toS)
 	if err != nil {
 		return dto.ShoppingOut{}, err
 	}
 	var slots []model.MealSlot
-	if err := s.DB.Preload("Recipe.Items.Ingredient").
+	if err := s.DB.WithContext(ctx).Preload("Recipe.Items.Ingredient").
 		Where("user_id = ? AND plan_date >= ? AND plan_date <= ?", userID, from, to).
 		Find(&slots).Error; err != nil {
-		return dto.ShoppingOut{}, apperr.Internal(err)
+		return dto.ShoppingOut{}, wrapQueryErr(err)
 	}
 	var pantry []model.PantryItem
-	if err := s.DB.Preload("Ingredient").Where("user_id = ?", userID).Find(&pantry).Error; err != nil {
-		return dto.ShoppingOut{}, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Preload("Ingredient").Where("user_id = ?", userID).Find(&pantry).Error; err != nil {
+		return dto.ShoppingOut{}, wrapQueryErr(err)
 	}
 	lines := expandSlots(slots)
 	daily := engine.AggregateDaily(lines)
@@ -354,14 +364,14 @@ func (s *Planner) Generate(userID uint, fromS, toS string) (dto.ShoppingOut, err
 	}
 	ded := engine.DeductFEFO(daily, lots, timeutil.Today())
 	merged := engine.MergeAcrossDays(ded.Remaining)
-	on, err := s.stapleMap(userID)
+	on, err := s.stapleMap(ctx, userID)
 	if err != nil {
 		return dto.ShoppingOut{}, err
 	}
 	keep, filtered := engine.FilterStaples(merged, on)
 
 	var checks []model.ShoppingCheck
-	_ = s.DB.Where("user_id = ? AND range_from = ? AND range_to = ?", userID, timeutil.FormatDate(from), timeutil.FormatDate(to)).Find(&checks)
+	_ = s.DB.WithContext(ctx).Where("user_id = ? AND range_from = ? AND range_to = ?", userID, timeutil.FormatDate(from), timeutil.FormatDate(to)).Find(&checks)
 	restoredIDs := map[string]bool{}
 	checked := map[string]bool{}
 	for _, c := range checks {
@@ -381,7 +391,7 @@ func (s *Planner) Generate(userID uint, fromS, toS string) (dto.ShoppingOut, err
 		stillFiltered = append(stillFiltered, it)
 	}
 
-	meta, err := s.ingMeta()
+	meta, err := s.ingMeta(ctx)
 	if err != nil {
 		return dto.ShoppingOut{}, err
 	}
@@ -420,7 +430,7 @@ func (s *Planner) Generate(userID uint, fromS, toS string) (dto.ShoppingOut, err
 	return out, nil
 }
 
-func (s *Planner) SetCheck(userID uint, in dto.CheckReq) error {
+func (s *Planner) SetCheck(ctx context.Context, userID uint, in dto.CheckReq) error {
 	from, to, err := parseRange(in.From, in.To)
 	if err != nil {
 		return err
@@ -433,10 +443,10 @@ func (s *Planner) SetCheck(userID uint, in dto.CheckReq) error {
 		IngredientID: in.IngredientID, Unit: engine.NormalizeUnit(in.Unit), Dimension: in.Dimension,
 		Checked: in.Checked, UpdatedAt: timeutil.Now(),
 	}
-	return upsertCheck(s.DB, row, map[string]any{"checked": in.Checked, "updated_at": timeutil.Now()})
+	return upsertCheck(s.DB.WithContext(ctx), row, map[string]any{"checked": in.Checked, "updated_at": timeutil.Now()})
 }
 
-func (s *Planner) Restore(userID uint, in dto.RestoreReq) error {
+func (s *Planner) Restore(ctx context.Context, userID uint, in dto.RestoreReq) error {
 	from, to, err := parseRange(in.From, in.To)
 	if err != nil {
 		return err
@@ -449,7 +459,7 @@ func (s *Planner) Restore(userID uint, in dto.RestoreReq) error {
 		IngredientID: in.IngredientID, Unit: engine.NormalizeUnit(in.Unit), Dimension: in.Dimension,
 		Restored: true, UpdatedAt: timeutil.Now(),
 	}
-	return upsertCheck(s.DB, row, map[string]any{"restored": true, "updated_at": timeutil.Now()})
+	return upsertCheck(s.DB.WithContext(ctx), row, map[string]any{"restored": true, "updated_at": timeutil.Now()})
 }
 
 func upsertCheck(db *gorm.DB, row model.ShoppingCheck, assign map[string]any) error {
@@ -457,15 +467,15 @@ func upsertCheck(db *gorm.DB, row model.ShoppingCheck, assign map[string]any) er
 		"user_id = ? AND range_from = ? AND range_to = ? AND ingredient_id = ? AND unit = ? AND dimension = ?",
 		row.UserID, row.RangeFrom, row.RangeTo, row.IngredientID, row.Unit, row.Dimension,
 	).Assign(assign).FirstOrCreate(&row).Error; err != nil {
-		return apperr.Internal(err)
+		return wrapQueryErr(err)
 	}
 	return nil
 }
 
-func (s *Planner) mustIngredient(id uint) error {
+func (s *Planner) mustIngredient(ctx context.Context, id uint) error {
 	var n int64
-	if err := s.DB.Model(&model.Ingredient{}).Where("id = ?", id).Count(&n).Error; err != nil {
-		return apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Model(&model.Ingredient{}).Where("id = ?", id).Count(&n).Error; err != nil {
+		return wrapQueryErr(err)
 	}
 	if n == 0 {
 		return apperr.NotFound("食材")
@@ -473,10 +483,10 @@ func (s *Planner) mustIngredient(id uint) error {
 	return nil
 }
 
-func (s *Planner) stapleMap(userID uint) (map[uint]bool, error) {
+func (s *Planner) stapleMap(ctx context.Context, userID uint) (map[uint]bool, error) {
 	var ings []model.Ingredient
-	if err := s.DB.Find(&ings).Error; err != nil {
-		return nil, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Find(&ings).Error; err != nil {
+		return nil, wrapQueryErr(err)
 	}
 	on := map[uint]bool{}
 	for _, ing := range ings {
@@ -485,8 +495,8 @@ func (s *Planner) stapleMap(userID uint) (map[uint]bool, error) {
 		}
 	}
 	var ov []model.StapleOverride
-	if err := s.DB.Where("user_id = ?", userID).Find(&ov).Error; err != nil {
-		return nil, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Where("user_id = ?", userID).Find(&ov).Error; err != nil {
+		return nil, wrapQueryErr(err)
 	}
 	for _, o := range ov {
 		on[o.IngredientID] = o.Enabled
@@ -500,10 +510,10 @@ type ingMeta struct {
 	Produce string
 }
 
-func (s *Planner) ingMeta() (map[uint]ingMeta, error) {
+func (s *Planner) ingMeta(ctx context.Context) (map[uint]ingMeta, error) {
 	var ings []model.Ingredient
-	if err := s.DB.Find(&ings).Error; err != nil {
-		return nil, apperr.Internal(err)
+	if err := s.DB.WithContext(ctx).Find(&ings).Error; err != nil {
+		return nil, wrapQueryErr(err)
 	}
 	m := map[uint]ingMeta{}
 	for _, ing := range ings {
