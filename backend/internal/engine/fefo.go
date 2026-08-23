@@ -59,6 +59,10 @@ type lotState struct {
 }
 
 // DeductFEFO 按用餐日升序、先到期先用。保质期 < 用餐日 的批次不得扣减。
+//
+// 本函数是纯试算：绝不修改调用方传入的 daily（既不改 BaseQty 也不重排顺序），
+// 否则同一份需求先带库存算一次、再做无库存预览时，第二次拿到的是被第一次
+// 扣减过的残值，试算不可重复。内部一律在副本上排序与写入。
 func DeductFEFO(daily []DailyNeed, lots []Lot, today time.Time) DeductResult {
 	states := make([]*lotState, 0, len(lots))
 	for _, l := range lots {
@@ -72,7 +76,9 @@ func DeductFEFO(daily []DailyNeed, lots []Lot, today time.Time) DeductResult {
 		return states[i].ID < states[j].ID
 	})
 
-	needs := daily
+	// 在副本上排序与扣减，避免污染调用方传入的 daily。
+	needs := make([]DailyNeed, len(daily))
+	copy(needs, daily)
 	sort.Slice(needs, func(i, j int) bool {
 		if !needs[i].Date.Equal(needs[j].Date) {
 			return needs[i].Date.Before(needs[j].Date)
