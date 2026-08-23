@@ -82,11 +82,13 @@ func Sign(secret string, userID uint, username string) (string, error) {
 		},
 	}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
-	var signErr *apperr.AppError
 	if err != nil {
-		signErr = apperr.Internal(err)
+		// 失败时返回裸的 *AppError；成功时返回未经接口包装的 nil，
+		// 否则 *AppError 的 nil 值被装箱进 error 接口后会变成 typed-nil，
+		// 调用方的 err != nil 判定永远成立，导致成功签发也被当成 500。
+		return "", apperr.Internal(err)
 	}
-	return token, signErr
+	return token, nil
 }
 
 func UID(c *gin.Context) uint {
