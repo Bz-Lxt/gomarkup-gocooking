@@ -60,11 +60,15 @@ func JWT(secret string) gin.HandlerFunc {
 		}
 		tokenStr := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 		claims := &Claims{}
+		// Only hold the lock during the parser call itself. Using defer here
+		// would extend the critical section through c.Next() and the entire
+		// downstream handler — including slow request-body reads — causing
+		// head-of-line blocking across all authenticated requests.
 		parserMu.Lock()
-		defer parserMu.Unlock()
 		tok, err := parser.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
 			return []byte(secret), nil
 		})
+		parserMu.Unlock()
 		if err != nil || !tok.Valid || claims.UserID == 0 {
 			WriteError(c, apperr.Unauthorized("登录已失效"))
 			c.Abort()
