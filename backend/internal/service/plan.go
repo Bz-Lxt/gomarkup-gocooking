@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -256,7 +257,9 @@ func (s *Planner) Staples(userID uint) ([]dto.StapleItem, error) {
 		return nil, apperr.Internal(err)
 	}
 	var ov []model.StapleOverride
-	_ = s.DB.Where("user_id = ?", userID).Find(&ov)
+	if err := s.DB.Where("user_id = ?", userID).Find(&ov).Error; err != nil {
+		return nil, apperr.Internal(err)
+	}
 	om := map[uint]bool{}
 	for _, o := range ov {
 		om[o.IngredientID] = o.Enabled
@@ -361,7 +364,9 @@ func (s *Planner) Generate(userID uint, fromS, toS string) (dto.ShoppingOut, err
 	keep, filtered := engine.FilterStaples(merged, on)
 
 	var checks []model.ShoppingCheck
-	_ = s.DB.Where("user_id = ? AND range_from = ? AND range_to = ?", userID, timeutil.FormatDate(from), timeutil.FormatDate(to)).Find(&checks)
+	if err := s.DB.Where("user_id = ? AND range_from = ? AND range_to = ?", userID, timeutil.FormatDate(from), timeutil.FormatDate(to)).Find(&checks).Error; err != nil {
+		return dto.ShoppingOut{}, apperr.Internal(err)
+	}
 	restoredIDs := map[string]bool{}
 	checked := map[string]bool{}
 	for _, c := range checks {
@@ -453,12 +458,15 @@ func (s *Planner) Restore(userID uint, in dto.RestoreReq) error {
 }
 
 func upsertCheck(db *gorm.DB, row model.ShoppingCheck, assign map[string]any) error {
-	db.Where(
+	tx := db.Where(
 		"user_id = ? AND range_from = ? AND range_to = ? AND ingredient_id = ? AND unit = ? AND dimension = ?",
 		row.UserID, row.RangeFrom, row.RangeTo, row.IngredientID, row.Unit, row.Dimension,
 	).Assign(assign).FirstOrCreate(&row)
-	if err := db.Error; err != nil {
+	if err := tx.Error; err != nil {
 		return apperr.Internal(err)
+	}
+	if tx.RowsAffected == 0 {
+		return apperr.Internal(fmt.Errorf("shopping check upsert affected 0 rows"))
 	}
 	return nil
 }
