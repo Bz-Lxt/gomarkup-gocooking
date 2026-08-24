@@ -21,8 +21,6 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-var signingClaims Claims
-
 func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
@@ -75,8 +73,7 @@ func JWT(secret string) gin.HandlerFunc {
 
 func Sign(secret string, userID uint, username string) (string, error) {
 	now := timeutil.Now()
-	claims := &signingClaims
-	*claims = Claims{
+	claims := &Claims{
 		UserID:   userID,
 		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
